@@ -19,6 +19,7 @@ void Settings::Load(SettingsInterface& si)
 
   cpu_execution_mode = ParseCPUExecutionMode(si.GetStringValue("CPU", "ExecutionMode", "Interpreter").c_str())
                          .value_or(CPUExecutionMode::Interpreter);
+  cpu_fastmem = si.GetBoolValue("CPU", "Fastmem", true);
 
   gpu_renderer = ParseRendererName(si.GetStringValue("GPU", "Renderer", GetRendererName(DEFAULT_GPU_RENDERER)).c_str())
                    .value_or(DEFAULT_GPU_RENDERER);
@@ -89,6 +90,7 @@ void Settings::Save(SettingsInterface& si) const
   si.SetBoolValue("Main", "ConfirmPowerOff", confim_power_off);
 
   si.SetStringValue("CPU", "ExecutionMode", GetCPUExecutionModeName(cpu_execution_mode));
+  si.SetBoolValue("CPU", "Fastmem", cpu_fastmem);
 
   si.SetStringValue("GPU", "Renderer", GetRendererName(gpu_renderer));
   si.SetIntValue("GPU", "ResolutionScale", static_cast<long>(gpu_resolution_scale));

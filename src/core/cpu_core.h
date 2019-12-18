@@ -36,7 +36,7 @@ public:
   Core();
   ~Core();
 
-  void Initialize(Bus* bus);
+  void Initialize(System* system, Bus* bus);
   void Reset();
   bool DoState(StateWrapper& sw);
 
@@ -53,6 +53,8 @@ public:
 
   ALWAYS_INLINE TickCount GetDowncount() const { return m_downcount; }
   ALWAYS_INLINE void SetDowncount(TickCount downcount) { m_downcount = downcount; }
+
+  ALWAYS_INLINE void SetFastmemBase(u8* ptr) { m_fastmem_base = ptr; }
 
   // Sets the PC and flushes the pipeline.
   void SetPC(u32 new_pc);
@@ -164,6 +166,7 @@ private:
 
   u32 m_cache_control = 0;
   System* m_system = nullptr;
+  u8* m_fastmem_base = nullptr;
 
   // data cache (used as scratchpad)
   std::array<u8, DCACHE_SIZE> m_dcache = {};

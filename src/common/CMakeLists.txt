@@ -44,6 +44,10 @@ add_library(common
   md5_digest.h
   null_audio_stream.cpp
   null_audio_stream.h
+  memory_arena.cpp
+  memory_arena.h
+  page_fault_handler.cpp
+  page_fault_handler.h
   rectangle.h
   progress_callback.cpp
   progress_callback.h
@@ -85,4 +89,9 @@ endif()
 
 if(ANDROID)
   target_link_libraries(common PRIVATE log)
+endif()
+
+if(${CMAKE_SYSTEM_NAME} STREQUAL "Linux")
+  # We need -lrt for shm_unlink
+  target_link_libraries(common PRIVATE rt)
 endif()
