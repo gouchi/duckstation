@@ -340,7 +340,11 @@ bool OpenGLDisplayWidget::initializeDeviceContext(bool debug_device)
 
   if (debug_device && GLAD_GL_KHR_debug)
   {
-    glad_glDebugMessageCallbackKHR(GLDebugCallback, nullptr);
+    if (m_gl_context->isOpenGLES())
+      glDebugMessageCallbackKHR(GLDebugCallback, nullptr);
+    else
+      glDebugMessageCallback(GLDebugCallback, nullptr);
+
     glEnable(GL_DEBUG_OUTPUT);
     glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
   }
