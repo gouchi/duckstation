@@ -172,6 +172,27 @@ void GPU_HW::HandleFlippedQuadTextureCoordinates(BatchVertex* vertices)
   }
 }
 
+bool GPU_HW::EnumerateBatchProgramUIDs(const std::function<bool(BatchProgramUID uid)>& callback)
+{
+  BatchProgramUID uid = {};
+  for (u8 texture_mode = 0; texture_mode < 9; texture_mode++)
+  {
+    uid.texture_mode = static_cast<TextureMode>(texture_mode);
+    for (u8 render_mode = 0; render_mode < 4; render_mode++)
+    {
+      uid.render_mode = static_cast<BatchRenderMode>(render_mode);
+      for (u8 dithering = 0; dithering < 2; dithering++)
+      {
+        uid.dithering_enable = ConvertToBoolUnchecked(dithering);
+        if (!callback(uid))
+          return false;
+      }
+    }
+  }
+
+  return true;
+}
+
 void GPU_HW::LoadVertices(RenderCommand rc, u32 num_vertices, const u32* command_ptr)
 {
   const u32 texpage = ZeroExtend32(m_draw_mode.mode_reg.bits) | (ZeroExtend32(m_draw_mode.palette_reg) << 16);
@@ -479,6 +500,7 @@ void GPU_HW::CopyVRAM(u32 src_x, u32 src_y, u32 dst_x, u32 dst_y, u32 width, u32
 
 void GPU_HW::DispatchRenderCommand(RenderCommand rc, u32 num_vertices, const u32* command_ptr)
 {
+  BatchProgramUID batch_uid = {};
   TextureMode texture_mode;
   if (rc.IsTexturingEnabled())
   {
@@ -490,7 +512,7 @@ void GPU_HW::DispatchRenderCommand(RenderCommand rc, u32 num_vertices, const u32
           (m_draw_mode.GetTexturePageRectangle().Intersects(m_vram_dirty_rect) ||
            (m_draw_mode.IsUsingPalette() && m_draw_mode.GetTexturePaletteRectangle().Intersects(m_vram_dirty_rect))))
       {
-        //Log_DevPrintf("Invalidating VRAM read cache due to drawing area overlap");
+        // Log_DevPrintf("Invalidating VRAM read cache due to drawing area overlap");
         if (!IsFlushed())
           FlushRender();
 
@@ -500,23 +522,24 @@ void GPU_HW::DispatchRenderCommand(RenderCommand rc, u32 num_vertices, const u32
       }
     }
 
-    texture_mode = m_draw_mode.GetTextureMode();
+    batch_uid.texture_mode = m_draw_mode.GetTextureMode();
     if (rc.raw_texture_enable)
     {
-      texture_mode =
-        static_cast<TextureMode>(static_cast<u8>(texture_mode) | static_cast<u8>(TextureMode::RawTextureBit));
+      batch_uid.texture_mode =
+        static_cast<TextureMode>(static_cast<u8>(batch_uid.texture_mode.GetValue()) | static_cast<u8>(TextureMode::RawTextureBit));
     }
   }
   else
   {
-    texture_mode = TextureMode::Disabled;
+    batch_uid.texture_mode = TextureMode::Disabled;
   }
 
   // has any state changed which requires a new batch?
   const TransparencyMode transparency_mode =
     rc.transparency_enable ? m_draw_mode.GetTransparencyMode() : TransparencyMode::Disabled;
   const BatchPrimitive rc_primitive = GetPrimitiveForCommand(rc);
-  const bool dithering_enable = (!m_true_color && rc.IsDitheringEnabled()) ? m_GPUSTAT.dither_enable : false;
+
+  batch_uid.dithering_enable = (!m_true_color && rc.IsDitheringEnabled()) ? m_GPUSTAT.dither_enable : false;
   if (!IsFlushed())
   {
     if (m_batch.texture_mode != texture_mode || m_batch.transparency_mode != transparency_mode ||

@@ -1,6 +1,7 @@
 #pragma once
 #include "common/heap_array.h"
 #include "gpu.h"
+#include <functional>
 #include <sstream>
 #include <string>
 #include <tuple>
@@ -45,6 +46,32 @@ protected:
     UNIFORM_BUFFER_SIZE = 512 * 1024
   };
 
+  union BatchProgramUID
+  {
+    union
+    {
+      u32 bits;
+
+      BitField<u32, TextureMode, 0, 4> texture_mode;
+      BitField<u32, BatchRenderMode, 4, 2> render_mode;
+      BitField<u32, bool, 6, 1> dithering_enable;
+    };
+
+    enum : u32
+    {
+      /// The number of total unique program UIDs.
+      NUM_UNIQUE_UIDS = 9 * // texture modes
+                        4 * // render modes
+                        2,  // dithering;
+
+      /// The number of array indices for a UID program array.
+      UID_ARRAY_SIZE = 16 * 4 * 2
+    };
+  };
+
+  /// An invalid UID which will never be used, used for initializing "last" values and such.
+  static constexpr BatchProgramUID INVALID_PROGRAM_UID = {0xFFFFFFFFu};
+
   struct BatchVertex
   {
     s32 x;
@@ -72,10 +99,9 @@ protected:
 
   struct BatchConfig
   {
+    BatchProgramUID program_uid;
     BatchPrimitive primitive;
-    TextureMode texture_mode;
     TransparencyMode transparency_mode;
-    bool dithering;
     bool set_mask_while_drawing;
     bool check_mask_before_draw;
 
@@ -84,7 +110,7 @@ protected:
     bool NeedsTwoPassRendering() const
     {
       return transparency_mode == GPU::TransparencyMode::BackgroundMinusForeground &&
-             texture_mode != TextureMode::Disabled;
+             program_uid.texture_mode != TextureMode::Disabled;
     }
 
     // Returns the render mode for this batch.
@@ -121,6 +147,7 @@ protected:
   }
 
   virtual void MapBatchVertexPointer(u32 required_vertices) = 0;
+  virtual void UnmapBatchVertexPointer() = 0;
   virtual void UpdateVRAMReadTexture() = 0;
 
   void SetFullVRAMDirtyRectangle()
@@ -155,6 +182,9 @@ protected:
 
   /// Handles quads with flipped texture coordinate directions.
   static void HandleFlippedQuadTextureCoordinates(BatchVertex* vertices);
+
+  /// Enumerates all batch program UIDs. If a the callback returns false, the function returns false.
+  static bool EnumerateBatchProgramUIDs(const std::function<bool(BatchProgramUID uid)>& callback);
 
   HeapArray<u16, VRAM_WIDTH * VRAM_HEIGHT> m_vram_shadow;
 
