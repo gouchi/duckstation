@@ -1014,6 +1014,8 @@ void HostInterface::UpdateSettings(const std::function<void()>& apply_callback)
       DebugAssert(m_audio_stream);
       m_audio_stream.reset();
       CreateAudioStream();
+      m_audio_stream->PauseOutput(m_paused);
+      UpdateSpeedLimiterState();
     }
 
     if (m_settings.video_sync_enabled != old_vsync_enabled || m_settings.audio_sync_enabled != old_audio_sync_enabled ||
