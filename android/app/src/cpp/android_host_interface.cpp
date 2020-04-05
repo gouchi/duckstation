@@ -379,11 +379,11 @@ DEFINE_JNI_ARGS_METHOD(jobject, AndroidHostInterface_create, jobject unused)
 
   // initialize the C++ side
   AndroidHostInterface* cpp_obj = new AndroidHostInterface(java_obj_ref);
-  if (!cpp_obj)
+  if (!cpp_obj->Initialize())
   {
-    // TODO: Do we need to release the original java object reference?
     Log_ErrorPrint("Failed to create C++ AndroidHostInterface");
-    env->DeleteGlobalRef(java_obj_ref);
+    cpp_obj->Shutdown();
+    delete cpp_obj;
     return nullptr;
   }
 

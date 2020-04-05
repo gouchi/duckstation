@@ -16,7 +16,7 @@ public class GameListEntry {
     private String mPath;
     private String mCode;
     private String mTitle;
-    private ConsoleRegion mRegion;
+    private DiscRegion mRegion;
     private EntryType mType;
     private long mSize;
 
@@ -28,9 +28,9 @@ public class GameListEntry {
         mSize = size;
 
         try {
-            mRegion = ConsoleRegion.valueOf(region);
+            mRegion = DiscRegion.valueOf(region);
         } catch (IllegalArgumentException e) {
-            mRegion = ConsoleRegion.NTSC_U;
+            mRegion = DiscRegion.NTSC_U;
         }
 
         try {
@@ -52,7 +52,7 @@ public class GameListEntry {
         return mTitle;
     }
 
-    public ConsoleRegion getRegion() {
+    public DiscRegion getRegion() {
         return mRegion;
     }
 
