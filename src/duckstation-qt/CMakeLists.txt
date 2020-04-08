@@ -3,7 +3,7 @@ set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
 add_executable(duckstation-qt
-  resources/icons.qrc
+  resources/resources.qrc
   audiosettingswidget.cpp
   audiosettingswidget.h
   audiosettingswidget.ui

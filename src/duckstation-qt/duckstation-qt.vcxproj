@@ -120,7 +120,7 @@
     </QtUi>
   </ItemGroup>
   <ItemGroup>
-    <QtResource Include="resources\icons.qrc">
+    <QtResource Include="resources\resources.qrc">
       <FileType>Document</FileType>
     </QtResource>
   </ItemGroup>
@@ -141,7 +141,7 @@
     <ClCompile Include="$(IntDir)moc_qthostinterface.cpp" />
     <ClCompile Include="$(IntDir)moc_qtprogresscallback.cpp" />
     <ClCompile Include="$(IntDir)moc_settingsdialog.cpp" />
-    <ClCompile Include="$(IntDir)qrc_icons.cpp" />
+    <ClCompile Include="$(IntDir)qrc_resources.cpp" />
   </ItemGroup>
   <ItemGroup>
     <Natvis Include="qt5.natvis" />
