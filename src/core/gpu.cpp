@@ -78,7 +78,7 @@ void GPU::SoftReset()
   m_crtc_state.in_hblank = false;
   m_crtc_state.in_vblank = false;
   m_state = State::Idle;
-  m_blitter_ticks = 0;
+  m_busy_ticks = 0;
   m_command_total_words = 0;
   m_vram_transfer = {};
   m_GP0_buffer.clear();
@@ -149,7 +149,7 @@ bool GPU::DoState(StateWrapper& sw)
   sw.Do(&m_crtc_state.in_vblank);
 
   sw.Do(&m_state);
-  sw.Do(&m_blitter_ticks);
+  sw.Do(&m_busy_ticks);
   sw.Do(&m_command_total_words);
   sw.Do(&m_GPUREAD_latch);
 
@@ -207,16 +207,13 @@ void GPU::RestoreGraphicsAPIState() {}
 
 void GPU::UpdateDMARequest()
 {
-  // we can kill the blitter ticks here if enough time has passed
-  if (m_blitter_ticks > 0 && GetPendingGPUTicks() >= m_blitter_ticks)
-    m_blitter_ticks = 0;
+  // TODO: Get rid of the writing vram hack here...
+  const bool not_busy = (m_busy_ticks <= 0);
+  const bool fifo_not_full = ((m_state == State::WritingVRAM) ? not_busy : m_GP0_buffer.size() < m_max_fifo_size);
 
-  const bool blitter_idle = (m_blitter_ticks <= 0);
-
-  m_GPUSTAT.ready_to_send_vram = (blitter_idle && m_state == State::ReadingVRAM);
-  m_GPUSTAT.ready_to_recieve_cmd = (blitter_idle && m_state == State::Idle);
-  m_GPUSTAT.ready_to_recieve_dma =
-    blitter_idle && (m_state == State::Idle || (m_state != State::ReadingVRAM && m_command_total_words > 0));
+  m_GPUSTAT.gpu_idle = (m_state == State::Idle && not_busy && fifo_not_full);
+  m_GPUSTAT.ready_to_send_vram = (not_busy && m_state == State::ReadingVRAM);
+  m_GPUSTAT.ready_to_recieve_dma = fifo_not_full && m_state != State::ReadingVRAM;
 
   bool dma_request;
   switch (m_GPUSTAT.dma_direction)
@@ -226,15 +223,15 @@ void GPU::UpdateDMARequest()
       break;
 
     case DMADirection::FIFO:
-      dma_request = blitter_idle && m_state >= State::ReadingVRAM; // FIFO not full/full
+      dma_request = m_GPUSTAT.ready_to_recieve_dma;
       break;
 
     case DMADirection::CPUtoGP0:
-      dma_request = blitter_idle && m_GPUSTAT.ready_to_recieve_dma;
+      dma_request = m_GPUSTAT.ready_to_recieve_dma;
       break;
 
     case DMADirection::GPUREADtoCPU:
-      dma_request = blitter_idle && m_GPUSTAT.ready_to_send_vram;
+      dma_request = m_GPUSTAT.ready_to_send_vram;
       break;
 
     default:
@@ -256,7 +253,7 @@ u32 GPU::ReadRegister(u32 offset)
     {
       // code can be dependent on the odd/even bit, so update the GPU state when reading.
       // we can mitigate this slightly by only updating when the raster is actually hitting a new line
-      if (IsRasterScanlinePending())
+      if (IsRasterScanlineOrCommandPending())
         Synchronize();
 
       return m_GPUSTAT.bits;
@@ -308,16 +305,10 @@ void GPU::DMAWrite(const u32* words, u32 word_count)
       std::copy(words, words + word_count, std::back_inserter(m_GP0_buffer));
       ExecuteCommands();
 
+      // HACK: Move this elsewhere
       if (m_state == State::WritingVRAM)
       {
-        Assert(m_blitter_ticks == 0);
-        m_blitter_ticks = GetPendingGPUTicks() + word_count;
-
-        // reschedule GPU tick event
-        const TickCount sysclk_ticks = GPUTicksToSystemTicks(word_count);
-        if (m_tick_event->GetTicksUntilNextExecution() > sysclk_ticks)
-          m_tick_event->Schedule(sysclk_ticks);
-
+        AddBusyTicks(word_count);
         UpdateDMARequest();
       }
     }
@@ -547,12 +538,32 @@ void GPU::UpdateSliceTicks()
       (m_crtc_state.horizontal_display_end - m_crtc_state.current_tick_in_scanline);
 
   m_tick_event->Schedule(
-    GPUTicksToSystemTicks((m_blitter_ticks > 0) ? std::min(m_blitter_ticks, ticks_until_vblank) : ticks_until_vblank));
+    GPUTicksToSystemTicks((m_busy_ticks > 0) ? std::min(m_busy_ticks, ticks_until_vblank) : ticks_until_vblank));
 }
 
 bool GPU::IsRasterScanlinePending() const
 {
   return (GetPendingGPUTicks() + m_crtc_state.current_tick_in_scanline) >= m_crtc_state.horizontal_total;
+}
+
+bool GPU::IsRasterScanlineOrCommandPending() const
+{
+  const TickCount pending_ticks = GetPendingGPUTicks();
+  return ((pending_ticks + m_crtc_state.current_tick_in_scanline) >= m_crtc_state.horizontal_total) ||
+         (m_busy_ticks > 0 && pending_ticks > m_busy_ticks);
+}
+
+void GPU::AddBusyTicks(TickCount count)
+{
+  if (m_busy_ticks == 0)
+    m_busy_ticks = GetPendingGPUTicks();
+
+  m_busy_ticks += count;
+
+  // reschedule GPU tick event
+  const TickCount sysclk_ticks = GPUTicksToSystemTicks(count);
+  if (m_tick_event->GetTicksUntilNextExecution() > sysclk_ticks)
+    m_tick_event->Schedule(sysclk_ticks);
 }
 
 void GPU::Execute(TickCount ticks)
@@ -565,14 +576,9 @@ void GPU::Execute(TickCount ticks)
     m_crtc_state.current_tick_in_scanline += gpu_ticks;
 
     // handle blits
-    TickCount blit_ticks_remaining = gpu_ticks;
-    while (m_blitter_ticks > 0 && blit_ticks_remaining > 0)
-    {
-      const TickCount slice = std::min(blit_ticks_remaining, m_blitter_ticks);
-      m_blitter_ticks -= slice;
-      blit_ticks_remaining -= slice;
-      UpdateDMARequest();
-    }
+    m_busy_ticks -= gpu_ticks;
+    ExecuteCommands();
+    m_busy_ticks = std::max(m_busy_ticks, 0);
   }
 
   if (m_crtc_state.current_tick_in_scanline < m_crtc_state.horizontal_total)
@@ -733,7 +739,7 @@ void GPU::WriteGP1(u32 value)
       m_command_total_words = 0;
       m_vram_transfer = {};
       m_GP0_buffer.clear();
-      m_blitter_ticks = 0;
+      m_busy_ticks = 0;
       UpdateDMARequest();
     }
     break;

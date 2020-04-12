@@ -397,6 +397,27 @@ void GPU_HW::LoadVertices(RenderCommand rc, u32 num_vertices, const u32* command
       std::clamp(max_x, static_cast<s32>(m_drawing_area.left), static_cast<s32>(m_drawing_area.right)) + 1,
       std::clamp(max_y, static_cast<s32>(m_drawing_area.top), static_cast<s32>(m_drawing_area.bottom)) + 1);
     m_vram_dirty_rect.Include(area_covered);
+
+    TickCount ticks;
+    switch (rc.primitive)
+    {
+      case Primitive::Rectangle:
+        ticks = (area_covered.GetWidth() * area_covered.GetHeight());
+        break;
+
+      case Primitive::Polygon:
+        ticks = ((area_covered.GetWidth() * area_covered.GetHeight()) / 2) << rc.quad_polygon;
+        break;
+
+      default:
+        ticks = (8 * std::max(area_covered.GetWidth(), area_covered.GetHeight()));
+        break;
+    }
+
+    ticks <<= BoolToUInt8(rc.texture_enable);
+
+    // Log_DebugPrintf("Ticks for primitive %u: %d", (u32)rc.primitive.GetValue(), ticks);
+    AddBusyTicks(ticks);
   }
 }
 
