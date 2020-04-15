@@ -94,7 +94,7 @@ public:
     MAX_PRIMITIVE_HEIGHT = 512,
     DOT_TIMER_INDEX = 0,
     HBLANK_TIMER_INDEX = 1,
-    MAX_RESOLUTION_SCALE = 16,
+    MAX_RESOLUTION_SCALE = 16
   };
 
   enum : u16
@@ -142,6 +142,9 @@ public:
 
   /// Returns true if enough ticks have passed for the raster to be on the next line.
   bool IsRasterScanlinePending() const;
+
+  /// Returns true if a raster scanline or command execution is pending.
+  bool IsRasterScanlineOrCommandPending() const;
 
   // Synchronizes the CRTC, updating the hblank timer.
   void Synchronize();
@@ -349,8 +352,9 @@ protected:
   u32 ReadGPUREAD();
   void WriteGP0(u32 value);
   void WriteGP1(u32 value);
-  void ExecuteCommands();
   void EndCommand();
+  void ExecuteCommands();
+  void AddBusyTicks(TickCount count);
   void HandleGetGPUInfoCommand(u32 value);
 
   // Rendering in the backend
@@ -362,6 +366,22 @@ protected:
   virtual void FlushRender();
   virtual void UpdateDisplay();
   virtual void DrawRendererStats(bool is_idle_frame);
+
+  // These are **very** approximate.
+  ALWAYS_INLINE void AddDrawTriangleTicks(u32 width, u32 height, bool textured, bool shaded)
+  {
+#if 0
+    const u32 draw_ticks = static_cast<u32>((std::abs(x1 * (y2 - y3) + x2 * (y3 - y1) + x3 * (y1 - y2)) + 1u) / 2u);
+#else
+    const u32 draw_ticks = (width * height) / 2;
+#endif
+    AddBusyTicks(draw_ticks << BoolToUInt8(textured | shaded));
+  }
+  ALWAYS_INLINE void AddDrawRectangleTicks(u32 width, u32 height, bool textured, bool shaded)
+  {
+    AddBusyTicks((width * height) << BoolToUInt8(textured | shaded));
+  }
+  ALWAYS_INLINE void AddDrawLineTicks(u32 width, u32 height, bool shaded) { AddBusyTicks(std::max(width, height) * 8); }
 
   HostDisplay* m_host_display = nullptr;
   System* m_system = nullptr;
@@ -397,7 +417,7 @@ protected:
     BitField<u32, bool, 23, 1> display_disable;
     BitField<u32, bool, 24, 1> interrupt_request;
     BitField<u32, bool, 25, 1> dma_data_request;
-    BitField<u32, bool, 26, 1> ready_to_recieve_cmd;
+    BitField<u32, bool, 26, 1> gpu_idle;
     BitField<u32, bool, 27, 1> ready_to_send_vram;
     BitField<u32, bool, 28, 1> ready_to_recieve_dma;
     BitField<u32, DMADirection, 29, 2> dma_direction;
@@ -596,11 +616,16 @@ protected:
   } m_crtc_state = {};
 
   State m_state = State::Idle;
-  TickCount m_blitter_ticks = 0;
+  TickCount m_busy_ticks = 0;
+  TickCount m_max_run_ahead = 250;
   u32 m_command_total_words = 0;
 
   /// GPUREAD value for non-VRAM-reads.
   u32 m_GPUREAD_latch = 0;
+
+  /// True if currently executing/syncing.
+  bool m_syncing = false;
+  bool m_potato = false;
 
   struct VRAMTransfer
   {
@@ -613,6 +638,7 @@ protected:
   } m_vram_transfer = {};
 
   std::vector<u32> m_GP0_buffer;
+  u32 m_max_fifo_size = 256;
 
   struct Stats
   {

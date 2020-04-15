@@ -226,6 +226,7 @@ void GPU_HW::LoadVertices(RenderCommand rc, u32 num_vertices, const u32* command
           static_cast<u32>(std::clamp<s32>(max_y, m_drawing_area.top, m_drawing_area.bottom)) + 1u;
 
         m_vram_dirty_rect.Include(clip_left, clip_right, clip_top, clip_bottom);
+        AddDrawTriangleTicks(clip_right - clip_left, clip_bottom - clip_top, rc.texture_enable, rc.shading_enable);
 
         std::memcpy(m_batch_current_vertex_ptr, vertices.data(), sizeof(BatchVertex) * 3);
         m_batch_current_vertex_ptr += 3;
@@ -255,6 +256,7 @@ void GPU_HW::LoadVertices(RenderCommand rc, u32 num_vertices, const u32* command
             static_cast<u32>(std::clamp<s32>(max_y_123, m_drawing_area.top, m_drawing_area.bottom)) + 1u;
 
           m_vram_dirty_rect.Include(clip_left, clip_right, clip_top, clip_bottom);
+          AddDrawTriangleTicks(clip_right - clip_left, clip_bottom - clip_top, rc.texture_enable, rc.shading_enable);
 
           AddVertex(vertices[2]);
           AddVertex(vertices[1]);
@@ -350,6 +352,7 @@ void GPU_HW::LoadVertices(RenderCommand rc, u32 num_vertices, const u32* command
         static_cast<u32>(std::clamp<s32>(pos_y + rectangle_height, m_drawing_area.top, m_drawing_area.bottom)) + 1u;
 
       m_vram_dirty_rect.Include(clip_left, clip_right, clip_top, clip_bottom);
+      AddDrawRectangleTicks(clip_right - clip_left, clip_bottom - clip_top, rc.texture_enable, rc.shading_enable);
     }
     break;
 
@@ -394,6 +397,7 @@ void GPU_HW::LoadVertices(RenderCommand rc, u32 num_vertices, const u32* command
               static_cast<u32>(std::clamp<s32>(max_y, m_drawing_area.top, m_drawing_area.bottom)) + 1u;
 
             m_vram_dirty_rect.Include(clip_left, clip_right, clip_top, clip_bottom);
+            AddDrawLineTicks(clip_right - clip_left, clip_bottom - clip_top, rc.shading_enable);
           }
         }
 
