@@ -76,7 +76,8 @@ public:
     EXP2_SIZE = 0x2000,
     EXP2_MASK = EXP2_SIZE - 1,
     BIOS_BASE = 0x1FC00000,
-    BIOS_SIZE = 0x80000
+    BIOS_SIZE = 0x80000,
+    BIOS_MASK = BIOS_SIZE - 1
   };
 
   enum : u32
@@ -287,7 +288,7 @@ private:
   u8* m_bios = nullptr;
 
   /// Direct access to RAM - used by DMA.
-  ALWAYS_INLINE u8* GetRAM() { return m_ram.data(); }
+  ALWAYS_INLINE u8* GetRAM() { return m_ram; }
 
   /// Returns the number of cycles stolen by DMA RAM access.
   ALWAYS_INLINE static TickCount GetDMARAMTickCount(u32 word_count)
