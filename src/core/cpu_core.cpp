@@ -38,8 +38,9 @@ Core::Core() = default;
 
 Core::~Core() = default;
 
-void Core::Initialize(Bus* bus)
+void Core::Initialize(System* system, Bus* bus)
 {
+  m_system = system;
   m_bus = bus;
 
   // From nocash spec.
@@ -323,25 +324,6 @@ void Core::RaiseException(Exception excode, u32 EPC, bool BD, bool BT, u8 CE)
   m_regs.npc = GetExceptionVector(excode);
   m_exception_raised = true;
   FlushPipeline();
-}
-
-void Core::SetExternalInterrupt(u8 bit)
-{
-  m_cop0_regs.cause.Ip |= static_cast<u8>(1u << bit);
-}
-
-void Core::ClearExternalInterrupt(u8 bit)
-{
-  m_cop0_regs.cause.Ip &= static_cast<u8>(~(1u << bit));
-}
-
-bool Core::HasPendingInterrupt()
-{
-  // const bool do_interrupt = m_cop0_regs.sr.IEc && ((m_cop0_regs.cause.Ip & m_cop0_regs.sr.Im) != 0);
-  const bool do_interrupt =
-    m_cop0_regs.sr.IEc && (((m_cop0_regs.cause.bits & m_cop0_regs.sr.bits) & (UINT32_C(0xFF) << 8)) != 0);
-
-  return do_interrupt;
 }
 
 void Core::DispatchInterrupt()

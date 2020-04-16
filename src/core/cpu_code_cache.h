@@ -1,5 +1,7 @@
 #pragma once
+#include "bus.h"
 #include "common/bitfield.h"
+#include "cpu_core.h"
 #include "cpu_types.h"
 #include <array>
 #include <memory>
@@ -107,6 +109,9 @@ public:
 private:
   using BlockMap = std::unordered_map<u32, CodeBlock*>;
 
+  void ExecuteCachedInterpreter();
+  void ExecuteRecompiler();
+
   void LogCurrentState();
 
   /// Returns the block key for the current execution state.
@@ -119,34 +124,53 @@ private:
   /// The block can also be flushed if recompilation failed, so ignore the pointer if false is returned.
   bool RevalidateBlock(CodeBlock* block);
 
+  CodeBlock* CompileBlock(CodeBlockKey key);
   bool CompileBlock(CodeBlock* block);
   void FlushBlock(CodeBlock* block);
+
   void AddBlockToPageMap(CodeBlock* block);
   void RemoveBlockFromPageMap(CodeBlock* block);
 
-  /// Link block from to to.
-  void LinkBlock(CodeBlock* from, CodeBlock* to);
+  void InterpretBlock(const CodeBlock* block);
 
-  /// Unlink all blocks which point to this block, and any that this block links to.
-  void UnlinkBlock(CodeBlock* block);
-
-  void InterpretCachedBlock(const CodeBlock& block);
-  void InterpretUncachedBlock();
+  /// Callbacks from the fast lookup table
+  static void DispatchCompileThunk(CPU::Core* cpu);
 
   System* m_system;
   Core* m_core;
   Bus* m_bus;
+
+  BlockMap m_blocks;
+
+  bool m_use_recompiler = false;
 
 #ifdef WITH_RECOMPILER
   std::unique_ptr<JitCodeBuffer> m_code_buffer;
   std::unique_ptr<Recompiler::ASMFunctions> m_asm_functions;
 #endif
 
-  BlockMap m_blocks;
-
-  bool m_use_recompiler = false;
-
   std::array<std::vector<CodeBlock*>, CPU_CODE_CACHE_PAGE_COUNT> m_ram_block_map;
+
+#ifdef WITH_RECOMPILER
+  /// Slots for fast block dispatch - basically we reserve a slot for each possible PC address, and fill it with either
+  /// a thunk to compile the block, or the address of the block's host code.
+  enum : u32
+  {
+    RAM_DISPATCH_SLOT_COUNT = Bus::RAM_SIZE / 4,
+    BIOS_DISPATCH_SLOT_COUNT = Bus::BIOS_SIZE / 4,
+    TOTAL_DISPATCH_SLOT_COUNT = RAM_DISPATCH_SLOT_COUNT + BIOS_DISPATCH_SLOT_COUNT,
+  };
+
+  /// Returns the dispatch slot for a given PC.
+  ALWAYS_INLINE static u32 GetDispatchSlotForPC(u32 pc)
+  {
+    return ((pc & PHYSICAL_MEMORY_ADDRESS_MASK) >= Bus::BIOS_BASE) ?
+             (RAM_DISPATCH_SLOT_COUNT + ((pc & Bus::BIOS_MASK) >> 2)) :
+             ((pc & Bus::RAM_MASK) >> 2);
+  }
+
+  std::array<CodeBlock::HostCodePointer, TOTAL_DISPATCH_SLOT_COUNT> m_dispatch_slots = {};
+#endif
 };
 
 } // namespace CPU

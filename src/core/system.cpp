@@ -225,7 +225,7 @@ bool System::Boot(const SystemBootParameters& params)
 
 void System::InitializeComponents()
 {
-  m_cpu->Initialize(m_bus.get());
+  m_cpu->Initialize(this, m_bus.get());
   m_cpu_code_cache->Initialize(this, m_cpu.get(), m_bus.get(), m_cpu_execution_mode == CPUExecutionMode::Recompiler);
   m_bus->Initialize(m_cpu.get(), m_cpu_code_cache.get(), m_dma.get(), m_interrupt_controller.get(), m_gpu.get(),
                     m_cdrom.get(), m_pad.get(), m_timers.get(), m_spu.get(), m_mdec.get(), m_sio.get());

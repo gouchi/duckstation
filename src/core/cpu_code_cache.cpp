@@ -35,6 +35,7 @@ void CodeCache::Initialize(System* system, Core* core, Bus* bus, bool use_recomp
   m_code_buffer = std::make_unique<JitCodeBuffer>(RECOMPILER_CODE_CACHE_SIZE, RECOMPILER_FAR_CODE_CACHE_SIZE);
   m_asm_functions = std::make_unique<Recompiler::ASMFunctions>();
   m_asm_functions->Generate(m_code_buffer.get());
+  m_dispatch_slots.fill(DispatchCompileThunk);
 #else
   m_use_recompiler = false;
 #endif
@@ -42,27 +43,28 @@ void CodeCache::Initialize(System* system, Core* core, Bus* bus, bool use_recomp
 
 void CodeCache::Execute()
 {
-  CodeBlockKey next_block_key = GetNextBlockKey();
+  if (m_use_recompiler)
+    ExecuteRecompiler();
+  else
+    ExecuteCachedInterpreter();
+}
 
+void CodeCache::ExecuteCachedInterpreter()
+{
   while (m_core->m_pending_ticks < m_core->m_downcount)
   {
     if (m_core->HasPendingInterrupt())
     {
-      // TODO: Fill in m_next_instruction...
       m_core->SafeReadMemoryWord(m_core->m_regs.pc, &m_core->m_next_instruction.bits);
       m_core->DispatchInterrupt();
-      next_block_key = GetNextBlockKey();
     }
 
-    CodeBlock* block = LookupBlock(next_block_key);
+    CodeBlock* block = LookupBlock(GetNextBlockKey());
     if (!block)
     {
-      Log_WarningPrintf("Falling back to uncached interpreter at 0x%08X", m_core->GetRegs().pc);
-      InterpretUncachedBlock();
-      continue;
+      Panic("Failed to compile block, cannot continue.");
+      return;
     }
-
-  reexecute_block:
 
 #if 0
     const u32 tick = m_system->GetGlobalTickCounter() + m_core->GetPendingTicks();
@@ -74,54 +76,24 @@ void CodeCache::Execute()
     LogCurrentState();
 #endif
 
-    if (m_use_recompiler)
-      block->host_code(m_core);
-    else
-      InterpretCachedBlock(*block);
+    InterpretBlock(block);
+  }
 
-    if (m_core->m_pending_ticks >= m_core->m_downcount)
-      break;
-    else if (m_core->HasPendingInterrupt() || !USE_BLOCK_LINKING)
-      continue;
+  // in case we switch to interpreter...
+  m_core->m_regs.npc = m_core->m_regs.pc;
+}
 
-    next_block_key = GetNextBlockKey();
-    if (next_block_key.bits == block->key.bits)
+void CodeCache::ExecuteRecompiler()
+{
+  while (m_core->m_pending_ticks < m_core->m_downcount)
+  {
+    if (m_core->HasPendingInterrupt())
     {
-      // we can jump straight to it if there's no pending interrupts
-      // ensure it's not a self-modifying block
-      if (!block->invalidated || RevalidateBlock(block))
-        goto reexecute_block;
+      m_core->SafeReadMemoryWord(m_core->m_regs.pc, &m_core->m_next_instruction.bits);
+      m_core->DispatchInterrupt();
     }
-    else if (!block->invalidated)
-    {
-      // Try to find an already-linked block.
-      // TODO: Don't need to dereference the block, just store a pointer to the code.
-      for (CodeBlock* linked_block : block->link_successors)
-      {
-        if (linked_block->key.bits == next_block_key.bits)
-        {
-          if (linked_block->invalidated && !RevalidateBlock(linked_block))
-          {
-            // CanExecuteBlock can result in a block flush, so stop iterating here.
-            break;
-          }
 
-          // Execute the linked block
-          block = linked_block;
-          goto reexecute_block;
-        }
-      }
-
-      // No acceptable blocks found in the successor list, try a new one.
-      CodeBlock* next_block = LookupBlock(next_block_key);
-      if (next_block)
-      {
-        // Link the previous block to this new block if we find a new block.
-        LinkBlock(block, next_block);
-        block = next_block;
-        goto reexecute_block;
-      }
-    }
+    m_dispatch_slots[GetDispatchSlotForPC(m_core->m_regs.pc)](m_core);
   }
 
   // in case we switch to interpreter...
@@ -150,6 +122,7 @@ void CodeCache::Flush()
   m_blocks.clear();
 #ifdef WITH_RECOMPILER
   m_code_buffer->Reset();
+  m_dispatch_slots.fill(DispatchCompileThunk);
 #endif
 }
 
@@ -188,21 +161,7 @@ CodeBlock* CodeCache::LookupBlock(CodeBlockKey key)
       return existing_block;
   }
 
-  CodeBlock* block = new CodeBlock(key);
-  if (CompileBlock(block))
-  {
-    // add it to the page map if it's in ram
-    AddBlockToPageMap(block);
-  }
-  else
-  {
-    Log_ErrorPrintf("Failed to compile block at PC=0x%08X", key.GetPC());
-    delete block;
-    block = nullptr;
-  }
-
-  iter = m_blocks.emplace(key.bits, block).first;
-  return block;
+  return CompileBlock(key);
 }
 
 bool CodeCache::RevalidateBlock(CodeBlock* block)
@@ -223,6 +182,10 @@ bool CodeCache::RevalidateBlock(CodeBlock* block)
   // re-add it to the page map since it's still up-to-date
   block->invalidated = false;
   AddBlockToPageMap(block);
+#ifdef WITH_RECOMPILER
+  if (m_use_recompiler)
+    m_dispatch_slots[GetDispatchSlotForPC(block->GetPC())] = block->host_code;
+#endif
   return true;
 
 recompile:
@@ -239,6 +202,42 @@ recompile:
     AddBlockToPageMap(block);
 
   return true;
+}
+
+void CodeCache::DispatchCompileThunk(CPU::Core* cpu)
+{
+  CodeCache* cc = cpu->m_system->GetCPUCodeCache();
+  CodeBlock* block = cc->LookupBlock(cc->GetNextBlockKey());
+  if (!block)
+  {
+    Panic("Failed to compile block, cannot continue.");
+    return;
+  }
+
+  block->host_code(cpu);
+}
+
+CodeBlock* CodeCache::CompileBlock(CodeBlockKey key)
+{
+  CodeBlock* block = new CodeBlock(key);
+  if (!CompileBlock(block))
+  {
+    Log_ErrorPrintf("Failed to compile block at PC=0x%08X", key.GetPC());
+    delete block;
+    return nullptr;
+  }
+
+  m_blocks.emplace(key.bits, block);
+
+  // add it to the page map if it's in ram
+  AddBlockToPageMap(block);
+
+#ifdef WITH_RECOMPILER
+  if (m_use_recompiler)
+    m_dispatch_slots[GetDispatchSlotForPC(block->GetPC())] = block->host_code;
+#endif
+
+  return block;
 }
 
 bool CodeCache::CompileBlock(CodeBlock* block)
@@ -348,6 +347,10 @@ void CodeCache::InvalidateBlocksWithPageIndex(u32 page_index)
     // Invalidate forces the block to be checked again.
     Log_DebugPrintf("Invalidating block at 0x%08X", block->GetPC());
     block->invalidated = true;
+#ifdef WITH_RECOMPILER
+    if (m_use_recompiler)
+      m_dispatch_slots[GetDispatchSlotForPC(block->GetPC())] = DispatchCompileThunk;
+#endif
   }
 
   // Block will be re-added next execution.
@@ -362,9 +365,13 @@ void CodeCache::FlushBlock(CodeBlock* block)
   Log_DevPrintf("Flushing block at address 0x%08X", block->GetPC());
 
   // if it's been invalidated it won't be in the page map
-  if (block->invalidated)
+  if (!block->invalidated)
     RemoveBlockFromPageMap(block);
 
+#ifdef WITH_RECOMPILER
+  if (m_use_recompiler)
+    m_dispatch_slots[GetDispatchSlotForPC(block->GetPC())] = DispatchCompileThunk;
+#endif
   m_blocks.erase(iter);
   delete block;
 }
@@ -399,40 +406,14 @@ void CodeCache::RemoveBlockFromPageMap(CodeBlock* block)
   }
 }
 
-void CodeCache::LinkBlock(CodeBlock* from, CodeBlock* to)
-{
-  Log_DebugPrintf("Linking block %p(%08x) to %p(%08x)", from, from->GetPC(), to, to->GetPC());
-  from->link_successors.push_back(to);
-  to->link_predecessors.push_back(from);
-}
-
-void CodeCache::UnlinkBlock(CodeBlock* block)
-{
-  for (CodeBlock* predecessor : block->link_predecessors)
-  {
-    auto iter = std::find(predecessor->link_successors.begin(), predecessor->link_successors.end(), block);
-    Assert(iter != predecessor->link_successors.end());
-    predecessor->link_successors.erase(iter);
-  }
-  block->link_predecessors.clear();
-
-  for (CodeBlock* successor : block->link_successors)
-  {
-    auto iter = std::find(successor->link_predecessors.begin(), successor->link_predecessors.end(), block);
-    Assert(iter != successor->link_predecessors.end());
-    successor->link_predecessors.erase(iter);
-  }
-  block->link_successors.clear();
-}
-
-void CodeCache::InterpretCachedBlock(const CodeBlock& block)
+void CodeCache::InterpretBlock(const CodeBlock* block)
 {
   // set up the state so we've already fetched the instruction
-  DebugAssert(m_core->m_regs.pc == block.GetPC());
+  DebugAssert((m_core->m_regs.pc & PHYSICAL_MEMORY_ADDRESS_MASK) == block->GetPC());
 
-  m_core->m_regs.npc = block.GetPC() + 4;
+  m_core->m_regs.npc = block->GetPC() + 4;
 
-  for (const CodeBlockInstruction& cbi : block.instructions)
+  for (const CodeBlockInstruction& cbi : block->instructions)
   {
     m_core->m_pending_ticks++;
 
@@ -460,47 +441,6 @@ void CodeCache::InterpretCachedBlock(const CodeBlock& block)
 
   // cleanup so the interpreter can kick in if needed
   m_core->m_next_instruction_is_branch_delay_slot = false;
-}
-
-void CodeCache::InterpretUncachedBlock()
-{
-  Panic("Fixme with regards to re-fetching PC");
-
-  // At this point, pc contains the last address executed (in the previous block). The instruction has not been fetched
-  // yet. pc shouldn't be updated until the fetch occurs, that way the exception occurs in the delay slot.
-  bool in_branch_delay_slot = false;
-  for (;;)
-  {
-    m_core->m_pending_ticks++;
-
-    // now executing the instruction we previously fetched
-    m_core->m_current_instruction.bits = m_core->m_next_instruction.bits;
-    m_core->m_current_instruction_pc = m_core->m_regs.pc;
-    m_core->m_current_instruction_in_branch_delay_slot = m_core->m_next_instruction_is_branch_delay_slot;
-    m_core->m_current_instruction_was_branch_taken = m_core->m_branch_was_taken;
-    m_core->m_next_instruction_is_branch_delay_slot = false;
-    m_core->m_branch_was_taken = false;
-    m_core->m_exception_raised = false;
-
-    // Fetch the next instruction, except if we're in a branch delay slot. The "fetch" is done in the next block.
-    if (!m_core->FetchInstruction())
-      break;
-
-    // execute the instruction we previously fetched
-    m_core->ExecuteInstruction();
-
-    // next load delay
-    m_core->UpdateLoadDelay();
-
-    const bool branch = IsBranchInstruction(m_core->m_current_instruction);
-    if (m_core->m_exception_raised || (!branch && in_branch_delay_slot) ||
-        IsExitBlockInstruction(m_core->m_current_instruction))
-    {
-      break;
-    }
-
-    in_branch_delay_slot = branch;
-  }
 }
 
 } // namespace CPU
