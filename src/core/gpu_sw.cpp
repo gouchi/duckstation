@@ -204,7 +204,7 @@ void GPU_SW::UpdateDisplay()
   }
 }
 
-void GPU_SW::DispatchRenderCommand(RenderCommand rc, u32 num_vertices, const u32* command_ptr)
+void GPU_SW::DispatchRenderCommand(RenderCommand rc, u32 num_vertices)
 {
   const bool dithering_enable = rc.IsDitheringEnabled() && m_GPUSTAT.dither_enable;
 
@@ -218,22 +218,21 @@ void GPU_SW::DispatchRenderCommand(RenderCommand rc, u32 num_vertices, const u32
 
       std::array<SWVertex, 4> vertices;
 
-      u32 buffer_pos = 1;
       for (u32 i = 0; i < num_vertices; i++)
       {
         SWVertex& vert = vertices[i];
-        const u32 color_rgb = (shaded && i > 0) ? (command_ptr[buffer_pos++] & UINT32_C(0x00FFFFFF)) : first_color;
+        const u32 color_rgb = (shaded && i > 0) ? (m_fifo.Pop() & UINT32_C(0x00FFFFFF)) : first_color;
         vert.color_r = Truncate8(color_rgb);
         vert.color_g = Truncate8(color_rgb >> 8);
         vert.color_b = Truncate8(color_rgb >> 16);
 
-        const VertexPosition vp{command_ptr[buffer_pos++]};
+        const VertexPosition vp{m_fifo.Pop()};
         vert.x = vp.x;
         vert.y = vp.y;
 
         if (textured)
         {
-          std::tie(vert.texcoord_x, vert.texcoord_y) = UnpackTexcoord(Truncate16(command_ptr[buffer_pos++]));
+          std::tie(vert.texcoord_x, vert.texcoord_y) = UnpackTexcoord(Truncate16(m_fifo.Pop()));
         }
         else
         {
@@ -253,10 +252,9 @@ void GPU_SW::DispatchRenderCommand(RenderCommand rc, u32 num_vertices, const u32
 
     case Primitive::Rectangle:
     {
-      u32 buffer_pos = 1;
       const auto [r, g, b] = UnpackColorRGB24(rc.color_for_first_vertex);
-      const VertexPosition vp{command_ptr[buffer_pos++]};
-      const u32 texcoord_and_palette = rc.texture_enable ? command_ptr[buffer_pos++] : 0;
+      const VertexPosition vp{m_fifo.Pop()};
+      const u32 texcoord_and_palette = rc.texture_enable ? m_fifo.Pop() : 0;
       const auto [texcoord_x, texcoord_y] = UnpackTexcoord(Truncate16(texcoord_and_palette));
 
       s32 width;
@@ -276,9 +274,12 @@ void GPU_SW::DispatchRenderCommand(RenderCommand rc, u32 num_vertices, const u32
           height = 16;
           break;
         default:
-          width = static_cast<s32>(command_ptr[buffer_pos] & UINT32_C(0xFFFF));
-          height = static_cast<s32>(command_ptr[buffer_pos] >> 16);
-          break;
+        {
+          const u32 width_and_height = m_fifo.Pop();
+          width = static_cast<s32>(width_and_height & UINT32_C(0xFFFF));
+          height = static_cast<s32>(width_and_height >> 16);
+        }
+        break;
       }
 
       const DrawRectangleFunction DrawFunction =
@@ -296,19 +297,18 @@ void GPU_SW::DispatchRenderCommand(RenderCommand rc, u32 num_vertices, const u32
       const DrawLineFunction DrawFunction = GetDrawLineFunction(shaded, rc.transparency_enable, dithering_enable);
 
       std::array<SWVertex, 2> vertices = {};
-      u32 buffer_pos = 1;
 
       // first vertex
       SWVertex* p0 = &vertices[0];
       SWVertex* p1 = &vertices[1];
-      p0->SetPosition(VertexPosition{command_ptr[buffer_pos++]});
+      p0->SetPosition(VertexPosition{m_fifo.Pop()});
       p0->SetColorRGB24(first_color);
 
       // remaining vertices in line strip
       for (u32 i = 1; i < num_vertices; i++)
       {
-        p1->SetColorRGB24(shaded ? (command_ptr[buffer_pos++] & UINT32_C(0x00FFFFFF)) : first_color);
-        p1->SetPosition(VertexPosition{command_ptr[buffer_pos++]});
+        p1->SetColorRGB24(shaded ? (m_fifo.Pop() & UINT32_C(0x00FFFFFF)) : first_color);
+        p1->SetPosition(VertexPosition{m_fifo.Pop()});
 
         (this->*DrawFunction)(p0, p1);
 
