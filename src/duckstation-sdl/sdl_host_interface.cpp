@@ -15,8 +15,8 @@
 #include "frontend-common/sdl_controller_interface.h"
 #include "imgui_impl_sdl.h"
 #include "opengl_host_display.h"
-#include "sdl_key_names.h"
 #include "scmversion/scmversion.h"
+#include "sdl_key_names.h"
 #include <cinttypes>
 #include <cmath>
 #include <imgui.h>
@@ -37,12 +37,24 @@ SDLHostInterface::~SDLHostInterface() = default;
 
 const char* SDLHostInterface::GetFrontendName() const
 {
+#if defined(_DEBUGFAST)
+  return "DuckStation SDL/ImGui Frontend (DebugFast)";
+#elif defined(_DEBUG)
+  return "DuckStation SDL/ImGui Frontend (Debug)";
+#else
   return "DuckStation SDL/ImGui Frontend";
+#endif
 }
 
 ALWAYS_INLINE static TinyString GetWindowTitle()
 {
+#if defined(_DEBUGFAST)
+  return TinyString::FromFormat("DuckStation DebugFast %s (%s)", g_scm_tag_str, g_scm_branch_str);
+#elif defined(_DEBUG)
+  return TinyString::FromFormat("DuckStation Debug %s (%s)", g_scm_tag_str, g_scm_branch_str);
+#else
   return TinyString::FromFormat("DuckStation %s (%s)", g_scm_tag_str, g_scm_branch_str);
+#endif
 }
 
 float SDLHostInterface::GetDPIScaleFactor(SDL_Window* window)
