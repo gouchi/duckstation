@@ -45,7 +45,13 @@ QtHostInterface::~QtHostInterface()
 
 const char* QtHostInterface::GetFrontendName() const
 {
+#if defined(_DEBUGFAST)
+  return "DuckStation Qt Frontend (DebugFast)";
+#elif defined(_DEBUG)
+  return "DuckStation Qt Frontend (Debug)";
+#else
   return "DuckStation Qt Frontend";
+#endif
 }
 
 bool QtHostInterface::Initialize()
