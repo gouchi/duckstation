@@ -7,35 +7,35 @@ on:
       - actions
 
 jobs:
-  windows-build:
-    runs-on: windows-2019
-    steps:
-    - uses: actions/checkout@v1
-      with:
-        submodules: true
-
-    - name: Compile release build
-      shell: cmd
-      run: |
-        call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
-        msbuild duckstation.sln -t:Build -p:Platform=x64;Configuration=ReleaseLTCG
-
-    - name: Remove extra bloat before archiving
-      shell: cmd
-      run: |
-        del /Q bin\x64\*.pdb
-        del /Q bin\x64\*.exp
-        del /Q bin\x64\*.lib
-        del /Q bin\x64\*.iobj
-        del /Q bin\x64\*.ipdb
-        del /Q bin\x64\common-tests*
-
-    - name: Upload release artifact
-      uses: actions/upload-artifact@v1
-      with:
-        name: "duckstation-windows-x64"
-        path: ".\\bin\\x64"
-        key: "windows-x64"
+#  windows-build:
+#    runs-on: windows-2019
+#    steps:
+#    - uses: actions/checkout@v1
+#      with:
+#        submodules: true
+#
+#    - name: Compile release build
+#      shell: cmd
+#      run: |
+#        call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
+#        msbuild duckstation.sln -t:Build -p:Platform=x64;Configuration=ReleaseLTCG
+#
+#    - name: Remove extra bloat before archiving
+#      shell: cmd
+#      run: |
+#        del /Q bin\x64\*.pdb
+#        del /Q bin\x64\*.exp
+#        del /Q bin\x64\*.lib
+#        del /Q bin\x64\*.iobj
+#        del /Q bin\x64\*.ipdb
+#        del /Q bin\x64\common-tests*
+#
+#    - name: Upload release artifact
+#      uses: actions/upload-artifact@v1
+#      with:
+#        name: "duckstation-windows-x64"
+#        path: ".\\bin\\x64"
+#        key: "windows-x64"
 
   linux-build:
     runs-on: ubuntu-latest
@@ -61,16 +61,36 @@ jobs:
     - name: Upload SDL AppImage
       uses: actions/upload-artifact@v1
       with:
-        name: "duckstation-sdl-linux-x64"
+        name: "linux-x64-appimage-sdl"
         path: "build/duckstation-sdl-x64.AppImage"
-        key: "linux-sdl-x64"
 
     - name: Upload Qt AppImage
       uses: actions/upload-artifact@v1
       with:
-        name: "duckstation-qt-linux-x64"
+        name: "linux-x64-appimage-qt"
         path: "build/duckstation-qt-x64.AppImage"
-        key: "linux-qt-x64"
 
-#  create-release:
-#    runs-on: ubuntu-latest
+  create-release:
+    needs: [linux-build]
+    runs-on: "ubuntu-latest"
+    steps:
+      - name: Download SDL AppImage Artifact
+        uses: actions/download-artifact@v1
+        with:
+          name: "linux-x64-appimage-sdl"
+      - name: Download Qt AppImage Artifact
+        uses: actions/download-artifact@v1
+        with:
+          name: "linux-x64-appimage-qt"
+
+      - name: Create release
+        uses: "marvinpinto/action-automatic-releases@latest"
+        with:
+          repo_token: "${{ secrets.GITHUB_TOKEN }}"
+          automatic_release_tag: "latest"
+          prerelease: true
+          draft: true
+          title: "Latest Development Build"
+          files: |
+            linux-x64-appimage-sdl/duckstation-sdl-x64.AppImage
+            linux-x64-appimage-qt/duckstation-qt-x64.AppImage
