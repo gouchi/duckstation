@@ -1,0 +1,76 @@
+name: Create rolling release
+
+on:
+  pull_request:
+  push:
+    branches:
+      - actions
+
+jobs:
+  windows-build:
+    runs-on: windows-2019
+    steps:
+    - uses: actions/checkout@v1
+      with:
+        submodules: true
+
+    - name: Compile release build
+      shell: cmd
+      run: |
+        call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
+        msbuild duckstation.sln -t:Build -p:Platform=x64;Configuration=ReleaseLTCG
+
+    - name: Remove extra bloat before archiving
+      shell: cmd
+      run: |
+        del /Q bin\x64\*.pdb
+        del /Q bin\x64\*.exp
+        del /Q bin\x64\*.lib
+        del /Q bin\x64\*.iobj
+        del /Q bin\x64\*.ipdb
+        del /Q bin\x64\common-tests*
+
+    - name: Upload release artifact
+      uses: actions/upload-artifact@v1
+      with:
+        name: "duckstation-windows-x64"
+        path: ".\\bin\\x64"
+        key: "windows-x64"
+
+  linux-build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v1
+
+    - name: Install packages
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get -y install cmake ninja-build ccache libsdl2-dev libgtk2.0-dev qtbase5-dev qtbase5-dev-tools qt5-default
+
+    - name: Compile build
+      shell: bash
+      run: |
+        mkdir build
+        cd build
+        cmake -DCMAKE_BUILD_TYPE=Release -DBUILD_SDL_FRONTEND=ON -DBUILD_QT_FRONTEND=ON -DUSE_SDL2=ON -G Ninja ..
+        ninja
+        ../appimage/generate-appimages.sh $(pwd)
+        
+    - name: Upload SDL AppImage
+      uses: actions/upload-artifact@v1
+      with:
+        name: "duckstation-sdl-linux-x64"
+        path: "build/duckstation-sdl-x64.AppImage"
+        key: "linux-sdl-x64"
+
+    - name: Upload Qt AppImage
+      uses: actions/upload-artifact@v1
+      with:
+        name: "duckstation-qt-linux-x64"
+        path: "build/duckstation-qt-x64.AppImage"
+        key: "linux-qt-x64"
+
+  create-release:
+    runs-on: ubuntu-latest
