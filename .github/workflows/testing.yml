@@ -72,5 +72,5 @@ jobs:
         path: "build/duckstation-qt-x64.AppImage"
         key: "linux-qt-x64"
 
-  create-release:
-    runs-on: ubuntu-latest
+#  create-release:
+#    runs-on: ubuntu-latest
