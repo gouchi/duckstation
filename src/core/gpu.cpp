@@ -35,6 +35,7 @@ bool GPU::Initialize(HostDisplay* host_display, System* system, DMA* dma, Interr
     m_system->CreateTimingEvent("GPU Tick", 1, 1, std::bind(&GPU::Execute, this, std::placeholders::_1), true);
   m_fifo_size = system->GetSettings().gpu_fifo_size;
   m_max_run_ahead = system->GetSettings().gpu_max_run_ahead;
+  m_console_is_pal = system->IsPALRegion();
   return true;
 }
 
@@ -46,9 +47,10 @@ void GPU::UpdateSettings()
   m_fifo_size = settings.gpu_fifo_size;
   m_max_run_ahead = settings.gpu_max_run_ahead;
 
-  if (m_force_ntsc_timings != settings.gpu_force_ntsc_timings)
+  if (m_force_ntsc_timings != settings.gpu_force_ntsc_timings || m_console_is_pal != m_system->IsPALRegion())
   {
     m_force_ntsc_timings = settings.gpu_force_ntsc_timings;
+    m_console_is_pal = m_system->IsPALRegion();
     UpdateCRTCConfig();
   }
 
@@ -63,6 +65,13 @@ void GPU::Reset()
   SoftReset();
   m_set_texture_disable_mask = false;
   m_GPUREAD_latch = 0;
+  m_crtc_state.fractional_ticks = 0;
+  m_crtc_state.current_tick_in_scanline = 0;
+  m_crtc_state.current_scanline = 0;
+  m_crtc_state.in_hblank = false;
+  m_crtc_state.in_vblank = false;
+  m_crtc_state.vertical_total_this_field = m_crtc_state.vertical_total;
+  UpdateSliceTicks();
 }
 
 void GPU::SoftReset()
@@ -77,11 +86,6 @@ void GPU::SoftReset()
   std::memset(&m_crtc_state.regs, 0, sizeof(m_crtc_state.regs));
   m_crtc_state.regs.horizontal_display_range = 0xC60260;
   m_crtc_state.regs.vertical_display_range = 0x3FC10;
-  m_crtc_state.fractional_ticks = 0;
-  m_crtc_state.current_tick_in_scanline = 0;
-  m_crtc_state.current_scanline = 0;
-  m_crtc_state.in_hblank = false;
-  m_crtc_state.in_vblank = false;
   m_blitter_state = BlitterState::Idle;
   m_command_ticks = 0;
   m_command_total_words = 0;
@@ -149,6 +153,7 @@ bool GPU::DoState(StateWrapper& sw)
   sw.Do(&m_crtc_state.horizontal_display_start);
   sw.Do(&m_crtc_state.horizontal_display_end);
   sw.Do(&m_crtc_state.vertical_total);
+  sw.Do(&m_crtc_state.vertical_total_this_field);
   sw.Do(&m_crtc_state.vertical_active_start);
   sw.Do(&m_crtc_state.vertical_active_end);
   sw.Do(&m_crtc_state.vertical_display_start);
@@ -353,6 +358,50 @@ void GPU::DMAWrite(const u32* words, u32 word_count)
   }
 }
 
+/**
+ * NTSC GPU clock 53.693175 MHz
+ * PAL GPU clock 53.203425 MHz
+ * courtesy of @ggrtk
+ *
+ * NTSC - sysclk * 715909 / 451584
+ * PAL - sysclk * 709379 / 451584
+ */
+
+TickCount GPU::GPUTicksToSystemTicks(TickCount gpu_ticks) const
+{
+  // convert to master clock, rounding up as we want to overshoot not undershoot
+  if (!m_console_is_pal)
+    return static_cast<TickCount>((u64(gpu_ticks) * u64(451584) + u64(715908)) / u64(715909));
+  else
+    return static_cast<TickCount>((u64(gpu_ticks) * u64(451584) + u64(709378)) / u64(709379));
+}
+
+TickCount GPU::SystemTicksToGPUTicks(TickCount sysclk_ticks) const
+{
+  if (!m_console_is_pal)
+    return static_cast<TickCount>((u64(sysclk_ticks) * u64(715909)) / u64(451584));
+  else
+    return static_cast<TickCount>((u64(sysclk_ticks) * u64(709379)) / u64(451584));
+}
+
+TickCount GPU::SystemTicksToGPUTicks(TickCount sysclk_ticks, TickCount* fractional_ticks) const
+{
+  if (!m_console_is_pal)
+  {
+    const u64 mul = u64(sysclk_ticks) * u64(715909) + u64(*fractional_ticks);
+    const TickCount ticks = mul / u64(451584);
+    *fractional_ticks = mul % u64(451584);
+    return ticks;
+  }
+  else
+  {
+    const u64 mul = u64(sysclk_ticks) * u64(709379) + u64(*fractional_ticks);
+    const TickCount ticks = mul / u64(451584);
+    *fractional_ticks = mul % u64(451584);
+    return ticks;
+  }
+}
+
 void GPU::AddCommandTicks(TickCount ticks)
 {
   if (m_command_ticks != 0)
@@ -381,15 +430,33 @@ void GPU::UpdateCRTCConfig()
 
   if (m_GPUSTAT.pal_mode)
   {
-    cs.vertical_total = PAL_TOTAL_LINES;
-    cs.current_scanline %= PAL_TOTAL_LINES;
+    if (m_GPUSTAT.vertical_interlace)
+    {
+      cs.vertical_total = PAL_TOTAL_LINES;
+      cs.current_scanline %= PAL_TOTAL_LINES;
+    }
+    else
+    {
+      cs.vertical_total = PAL_TOTAL_LINES_INTERLACED;
+      cs.current_scanline %= PAL_TOTAL_LINES_INTERLACED;
+    }
+
     cs.horizontal_total = PAL_TICKS_PER_LINE;
     cs.current_tick_in_scanline %= PAL_TICKS_PER_LINE;
   }
   else
   {
-    cs.vertical_total = NTSC_TOTAL_LINES;
-    cs.current_scanline %= NTSC_TOTAL_LINES;
+    if (m_GPUSTAT.vertical_interlace)
+    {
+      cs.vertical_total = NTSC_TOTAL_LINES_INTERLACED;
+      cs.current_scanline %= NTSC_TOTAL_LINES_INTERLACED;
+    }
+    else
+    {
+      cs.vertical_total = NTSC_TOTAL_LINES;
+      cs.current_scanline %= NTSC_TOTAL_LINES;
+    }
+
     cs.horizontal_total = NTSC_TICKS_PER_LINE;
     cs.current_tick_in_scanline %= NTSC_TICKS_PER_LINE;
   }
@@ -420,9 +487,12 @@ void GPU::UpdateCRTCConfig()
     cs.current_tick_in_scanline %= NTSC_TICKS_PER_LINE;
   }
 
-  const TickCount ticks_per_frame = cs.horizontal_total * cs.vertical_total;
+  // every second line has an additional tick
+  // extra line every other field -> half a line for interlaced modes on average
+  const TickCount ticks_per_frame = (cs.horizontal_total * cs.vertical_total) + /*(cs.vertical_total / 2u) +*/
+                                    (m_GPUSTAT.vertical_interlace ? (cs.horizontal_total / 2u) : 0);
   const float vertical_frequency =
-    static_cast<float>(static_cast<double>((u64(MASTER_CLOCK) * 11) / 7) / static_cast<double>(ticks_per_frame));
+    static_cast<float>(static_cast<double>(SystemTicksToGPUTicks(MASTER_CLOCK)) / static_cast<double>(ticks_per_frame));
   m_system->SetThrottleFrequency(vertical_frequency);
 
   UpdateCRTCDisplayParameters();
@@ -571,7 +641,7 @@ void GPU::UpdateCRTCDisplayParameters()
 TickCount GPU::GetPendingGPUTicks() const
 {
   const TickCount pending_sysclk_ticks = m_tick_event->GetTicksSinceLastExecution();
-  return ((pending_sysclk_ticks * 11) + m_crtc_state.fractional_ticks) / 7;
+  return SystemTicksToGPUTicks(pending_sysclk_ticks);
 }
 
 void GPU::UpdateSliceTicks()
@@ -579,7 +649,7 @@ void GPU::UpdateSliceTicks()
   // figure out how many GPU ticks until the next vblank or event
   const TickCount lines_until_vblank =
     (m_crtc_state.current_scanline >= m_crtc_state.vertical_display_end ?
-       (m_crtc_state.vertical_total - m_crtc_state.current_scanline + m_crtc_state.vertical_display_end) :
+       (m_crtc_state.vertical_total_this_field - m_crtc_state.current_scanline + m_crtc_state.vertical_display_end) :
        (m_crtc_state.vertical_display_end - m_crtc_state.current_scanline));
   const TickCount lines_until_event = m_timers->IsExternalIRQEnabled(HBLANK_TIMER_INDEX) ?
                                         std::min(m_timers->GetTicksUntilIRQ(HBLANK_TIMER_INDEX), lines_until_vblank) :
@@ -646,8 +716,21 @@ void GPU::Execute(TickCount ticks)
     return;
   }
 
+#if 1
   u32 lines_to_draw = m_crtc_state.current_tick_in_scanline / m_crtc_state.horizontal_total;
   m_crtc_state.current_tick_in_scanline %= m_crtc_state.horizontal_total;
+#else
+  u32 lines_to_draw = 0;
+  u32 ticks_scanline = m_crtc_state.current_scanline;
+  u32 ticks_per_line = m_crtc_state.horizontal_total + (ticks_scanline & 1u);
+  while (m_crtc_state.current_tick_in_scanline >= ticks_per_line)
+  {
+    m_crtc_state.current_tick_in_scanline -= ticks_per_line;
+    ticks_scanline++;
+    ticks_per_line = m_crtc_state.horizontal_total + (ticks_scanline & 1u);
+    lines_to_draw++;
+  }
+#endif
 #if 0
   Log_WarningPrintf("Old line: %u, new line: %u, drawing %u", m_crtc_state.current_scanline,
                     m_crtc_state.current_scanline + lines_to_draw, lines_to_draw);
@@ -666,10 +749,10 @@ void GPU::Execute(TickCount ticks)
   while (lines_to_draw > 0)
   {
     const u32 lines_to_draw_this_loop =
-      std::min(lines_to_draw, m_crtc_state.vertical_total - m_crtc_state.current_scanline);
+      std::min(lines_to_draw, m_crtc_state.vertical_total_this_field - m_crtc_state.current_scanline);
     const u32 prev_scanline = m_crtc_state.current_scanline;
     m_crtc_state.current_scanline += lines_to_draw_this_loop;
-    DebugAssert(m_crtc_state.current_scanline <= m_crtc_state.vertical_total);
+    DebugAssert(m_crtc_state.current_scanline <= m_crtc_state.vertical_total_this_field);
     lines_to_draw -= lines_to_draw_this_loop;
 
     // clear the vblank flag if the beam would pass through the display area
@@ -706,10 +789,11 @@ void GPU::Execute(TickCount ticks)
     }
 
     // past the end of vblank?
-    if (m_crtc_state.current_scanline == m_crtc_state.vertical_total)
+    if (m_crtc_state.current_scanline == m_crtc_state.vertical_total_this_field)
     {
       // start the new frame
       m_crtc_state.current_scanline = 0;
+      m_crtc_state.vertical_total_this_field = m_crtc_state.vertical_total + m_crtc_state.interlaced_field;
     }
   }
 

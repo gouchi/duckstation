@@ -104,10 +104,12 @@ public:
 
   enum : u16
   {
-    NTSC_TICKS_PER_LINE = 3413,
+    NTSC_TICKS_PER_LINE = 3412, // + 0.5
     NTSC_TOTAL_LINES = 263,
-    PAL_TICKS_PER_LINE = 3406,
+    NTSC_TOTAL_LINES_INTERLACED = 262, // + 0.5
+    PAL_TICKS_PER_LINE = 3405,
     PAL_TOTAL_LINES = 314,
+    PAL_TOTAL_LINES_INTERLACED = 312, // + 0.5
   };
 
   // 4x4 dither matrix.
@@ -170,11 +172,9 @@ public:
   bool ConvertScreenCoordinatesToBeamTicksAndLines(s32 window_x, s32 window_y, u32* out_tick, u32* out_line) const;
 
 protected:
-  static constexpr TickCount GPUTicksToSystemTicks(TickCount gpu_ticks)
-  {
-    // convert to master clock, rounding up as we want to overshoot not undershoot
-    return static_cast<TickCount>((static_cast<u32>(gpu_ticks) * 7u + 10u) / 11u);
-  }
+  TickCount GPUTicksToSystemTicks(TickCount gpu_ticks) const;
+  TickCount SystemTicksToGPUTicks(TickCount sysclk_ticks) const;
+  TickCount SystemTicksToGPUTicks(TickCount sysclk_ticks, TickCount* fractional_ticks) const;
 
   // Helper/format conversion functions.
   static constexpr u8 Convert5To8(u8 x5) { return (x5 << 3) | (x5 & 7); }
@@ -572,6 +572,7 @@ protected:
     s32 y;
   } m_drawing_offset = {};
 
+  bool m_console_is_pal = false;
   bool m_set_texture_disable_mask = false;
   bool m_drawing_area_changed = false;
   bool m_force_progressive_scan = false;
@@ -628,6 +629,7 @@ protected:
     u16 horizontal_display_start;
     u16 horizontal_display_end;
     u16 vertical_total;
+    u16 vertical_total_this_field;
     u16 vertical_active_start;
     u16 vertical_active_end;
     u16 vertical_display_start;
