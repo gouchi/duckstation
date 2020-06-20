@@ -58,8 +58,12 @@ GPUSettingsWidget::GPUSettingsWidget(QtHostInterface* host_interface, QWidget* p
   dialog->registerWidgetHelp(
     m_ui.renderer, "Renderer", Settings::GetRendererDisplayName(Settings::DEFAULT_GPU_RENDERER),
     "Chooses the backend to use for rendering tasks for the the console GPU. Depending on your system and hardware, "
-    "Direct3D 11 and OpenGL hardware backends may be available. The software renderer offers the best compatibility, "
-    "but is the slowest and does not offer any enhancements.");
+    "Direct3D 11, Vulkan and OpenGL hardware backends may be available. The software renderer offers the best "
+    "compatibility, but is the slowest and does not offer any enhancements.");
+  dialog->registerWidgetHelp(
+    m_ui.adapter, "Adapter", "(Default)",
+    "If your system contains multiple GPUs or adapters, you can select which GPU you wish to use for the hardware "
+    "renderers. This option is only supported in Direct3D and Vulkan, OpenGL will always use the default device.");
   dialog->registerWidgetHelp(m_ui.useDebugDevice, "Use Debug Device", "Unchecked",
                              "Enables the usage of debug devices and shaders for rendering APIs which support them. "
                              "Should only be used when debugging the emulator.");
