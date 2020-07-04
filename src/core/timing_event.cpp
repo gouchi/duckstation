@@ -26,6 +26,17 @@ TickCount TimingEvent::GetTicksUntilNextExecution() const
   return std::max(m_downcount - m_system->m_cpu->GetPendingTicks(), static_cast<TickCount>(0));
 }
 
+void TimingEvent::Delay(TickCount ticks)
+{
+  if (!m_active)
+  {
+    Panic("Trying to delay an inactive event");
+    return;
+  }
+
+  m_downcount += ticks;
+}
+
 void TimingEvent::Schedule(TickCount ticks)
 {
   const TickCount pending_ticks = m_system->m_cpu->GetPendingTicks();
